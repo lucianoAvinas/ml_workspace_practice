@@ -4,6 +4,7 @@ import random
 import numpy as np
 
 from abc import ABCMeta
+from collections import namedtuple
 
 
 def runtimefinal(method):
@@ -40,28 +41,40 @@ AbstactFinalMeta = type('AbstactFinalMeta', (ABCMeta, RuntimeFinalMeta), {})
 
 
 class Result(object):
-    def __init__(self, loss, to_cpu=True):
+    def __init__(self, loss, cpu_transfer=True):
         if isinstance(loss, Result):
             for key, val in vars(loss):
                 super().__setattr__(key, val)
         else:
-            super().__setattr__('to_cpu', to_cpu)
+            super().__setattr__('cpu_transfer', cpu_transfer)
             super().__setattr__('loss', loss)
 
     # Only takes tensors or an iterable object of tensors (not dicts)
+    # Introduces new step_dimension
     def __setattr__(self, name, value):
         if isinstance(value, torch.Tensor):
             super().__setattr__(name,
-                torch.Tensor([value.cpu().detach() if self.to_cpu 
-                              else value.detach()]))
+                [torch.Tensor([value.cpu().detach() if self.cpu_transfer
+                               else value.detach()])])
         else:
             super().__setattr__(name,
-                torch.cat([subval.cpu().detach() if self.to_cpu
-                           else subval.detach() for subval in value]))
+                [torch.cat([subval.cpu().detach() if self.cpu_transfer
+                            else subval.detach() for subval in value])])
 
     @staticmethod
     def collect(result_list):
+        coll_dict = {}
+        for result in result_list:
+            var_dict = vars(result)
 
+            for key in var_dict:
+                if key not in coll_dict:
+                   coll_dict[key] = []
+
+                coll_dict[key] += var_dict[key]
+
+        coll_dict.pop('cpu_transfer', None)
+        return namedtuple('CollectedResults', coll_dict.keys())(coll_dict.values())
 
 
 def get_group_dicts(args, parser):

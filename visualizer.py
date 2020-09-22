@@ -1,9 +1,9 @@
 from visdom import server, Visdom   # Forcefully toggled off debug mode in source
 import multiprocessing
 from zmq.eventloop import ioloop
-ioloop.install()  # Needs to happen before any tornado imports!
-import tornado.ioloop      # noqa E402: gotta install ioloop first
-import tornado.httpserver  # noqa E402: gotta install ioloop first
+ioloop.install()
+import tornado.ioloop
+import tornado.httpserver 
 import logging
 import torch
 import time

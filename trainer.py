@@ -1,27 +1,35 @@
-import argparse
+import sys
 import torch
+import argparse
 import torch.nn as nn
 
 from abc import abstractmethod
 from collections.abc import Iterable
 from torch.utils.data import DataLoader
-from utils import AbstactFinalMeta, runtimefinal, seed_everything, \
-                  Result
+from utils import AbstactFinalMeta, runtimefinal, Result, seed_everything
 
 
 class Trainer(metaclass=AbstactFinalMeta):
-    def __init__(self, n_epochs, batch_size, n_cpus=0, use_gpu=False,
-                 tune_cuddn=False, set_deterministic=None, pin_memory=False):
+    def __init__(self, n_epochs, batch_size,n_cpus=0, use_gpu=False, checkpoint_dir=None,
+                 save_frequency=None, tune_cuddn=False, set_deterministic=None, pin_memory=False):
+        if save_frequency != None:
+            assert save_frequency > 0
+
         self.n_epochs = n_epochs
         self.batch_size
         self.n_cpus = n_cpus
         self.use_gpu = use_gpu
+        self.checkpoint_dir = checkpoint_dir
+        self.save_frequency = save_frequency
         self.tune_cuddn = tune_cuddn
         self.set_deterministic = set_deterministic
         self.pin_memory = pin_memory
 
         self.device = torch.device('cuda:0' if use_gpu else 'cpu')
         self.current_epoch = 0
+        self.best_validation = None
+        self.best_state = None
+        self.nn_module_names = set([])
 
     def initialize_run(self):
         if self.set_deterministic:
@@ -32,12 +40,12 @@ class Trainer(metaclass=AbstactFinalMeta):
         elif self.tune_cuddn:
             torch.backends.cudnn.benchmark = True
 
-
         si_units = [' ', 'k', 'M', 'G', 'T']
         print('-'*15+'Module Parameter Sizes'+'-'*15)
         obj_vars = vars(self)
         for var_name, var_value in obj_vars:
             if isinstance(var_value, nn.Module):
+                self.nn_module_names.add(var_name)
 
                 var_nparams = str(sum(p.numel() for p in var_value.parameters()))
                 unit_ind = min(len(var_nparams) // 3, len(si_units) - 1)
@@ -72,6 +80,10 @@ class Trainer(metaclass=AbstactFinalMeta):
                                   help='Set cuddn benchmark flag to true.')
         trainer_args.add_argument('--use_gpu', action='store_true',
                                   help='Sets PyTorch device to gpu.')
+        trainer_args.add_argument('-chck_dir', '--checkpoint_dir', default=None,
+                                  help='Directory to save and load checkpoints.')
+        trainer_args.add_argument('-save_freq', '--save_frequency', type=int, default=None,
+                                  help='Number of epochs between checkpoint saves.')
         trainer_args.add_argument('--set_deterministic', type=int, default=None,
                                   help='Seed PyTorch and NumPy. Will overwrite tune_'
                                        'cudnn for deterministic alternative')
@@ -80,14 +92,31 @@ class Trainer(metaclass=AbstactFinalMeta):
 
         return parser
 
+    def compute_validation(self, validation_outputs):
+        # To be overwritten for different validation calculation behavior
+        if validation_outputs.loss[0].shape[0] > 1:
+            # Take first entry of each losses tuple and average
+            computed_validation = torch.mean(torch.stack(validation_outputs.loss))[0]
+        else:
+            computed_validation = torch.mean(torch.cat(validation_outputs.loss))
+
+        return computed_validation
+
+    def get_state_dicts(self):
+        all_state_dicts = dict()
+        for nn_module_name in self.nn_module_names:
+            nn_module = getattr(self, nn_module_name)
+
+            nn_module.cpu()
+            all_state_dicts[nn_module_name] = nn_module.state_dict()
+            nn_module.to(self.device)
+
+        return all_state_dicts
+
     @runtimefinal
     def fit(self, training_dataset, validation_dataset):
-        # Instantiate Loaders
-        # Setup optimizers
-        # Setup visualizer
-        # Loop # detach and aggregate (pre-fill list)
-        # optim step and sched step
-        # Checkpoint for timestep and track best val
+        self.initialize_run()
+
         train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
                                   shuffle=True, num_workers=self.n_cpus, 
                                   pin_memory=(self.use_gpu and self.pin_memory))
@@ -99,6 +128,8 @@ class Trainer(metaclass=AbstactFinalMeta):
         optimizers = self.configure_optimizers()
         optim_list, sched_list = dfs_detree_optimizer_list(optimizers)
 
+        self.best_validation = sys.float_info.max
+        best_state = None
         for _ in range(self.n_epochs):
             train_outputs = self.data_loop(train_loader, 'train', 
                                            self.training_step, optim_list)
@@ -110,19 +141,59 @@ class Trainer(metaclass=AbstactFinalMeta):
             with torch.no_grad():
                 valid_outputs = self.data_loop(valid_loader, 'eval', 
                                                self.validation_step)
-                # checkpointing of the first arg epoch loss[0]
+
+                curr_validation = self.compute_validation(valid_outputs)
+                if curr_validation < self.best_validation:
+                    self.best_validation = curr_validation
+                    best_state = self.get_state_dicts()
+                            
                 self.validation_epoch_end(valid_outputs)
 
             self.current_epoch += 1
+            if self.save_frequency != None and self.current_epoch % self.save_frequency == 0:
+                all_state_dicts = self.get_state_dicts()
+                for name, state in all_state_dicts.items():
+                    torch.save(state, os.path.join(self.checkpoint_dir, name +  \
+                                                   f'_epoch{self.current_epoch}.pth'))
 
+        for name, state in best_state.items():
+            torch.save(state, os.path.join(self.checkpoint_dir, name + f'_best.pth'))
+        self.best_state = best_state
 
     @runtimefinal
-    def test(self, testing_dataset, chckpt=None):
-        # Instantiate Loader
-        # If chkpt none use previously trained best
+    def test(self, testing_dataset, chckpt_suffix=None):
+        if chckpt_suffix:
+            # standardize suffix
+            chckpt_suffix = chckpt_suffix.split('.')[0] + '.pth'
+            if chckpt_suffix[0] != '_':
+                chckpt_suffix = '_' + chckpt_suffix
+
+            if self.checkpoint_dir == None:
+                raise Exception('Checkpoint directory must be set if checkpoint '
+                                'suffix is specified')
+        else:
+            if self.best_state == None:
+                raise Exception('No previous training and no checkpoint specified.')
+
+
+        self.initialize_run()
+
         test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
                                  shuffle=False, num_workers=self.n_cpus, 
                                  pin_memory=(self.use_gpu and self.pin_memory))
+
+        for nn_module_name in self.nn_module_names:
+            if chckpt_suffix != None:
+                module_path = os.path.join(self.checkpoint_dir, nn_module_name + \
+                                           chckpt_suffix)
+                state = torch.load(module_path)
+            else:
+                state = self.best_state[nn_module_name]
+                
+            nn_module = getattr(self, nn_module_name)
+            nn_module.load_state_dict(state)
+            nn_module.to(self.device)
+
 
         with torch.no_grad():
             test_outputs = self.data_loop(test_loader, 'eval', self.testing_step)
@@ -130,15 +201,13 @@ class Trainer(metaclass=AbstactFinalMeta):
 
     @runtimefinal
     def data_loop(self, loader, phase, step_method, optim_list=[]):
-        obj_vars = vars(self)
-        for var_name, var_value in obj_vars:
-            if isinstance(var_value, nn.Module):
-                getattr(self, phase)()
+        for nn_module_name in self.nn_module_names:
+            getattr(getattr(self, nn_module_name), phase)()
 
         for i in range(len(optim_list)):
                 optim_list[i].zero_grad()
 
-        collected_results = [None] * len(loader)
+        all_results = [None] * len(loader)
         for batch_idx, batch in enumerate(loader):
             batch.to(self.device)
             step_result = Result(step_method(batch, batch_idx))
@@ -147,9 +216,13 @@ class Trainer(metaclass=AbstactFinalMeta):
                 step_result.loss[i].backward()
                 optim_list[i].step()
                 optim_list[i].zero_grad()
+
             # This handles detach and to_cpu logic through __setattr__
             step_result.loss = step_result.loss
-            #collect
+            all_results[batch_idx] = step_result
+
+        collected_results = Result.collect(all_results)
+        return collected_results
 
     @abstractmethod
     def configure_optimizers(self):
