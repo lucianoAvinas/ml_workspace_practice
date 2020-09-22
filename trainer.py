@@ -44,7 +44,10 @@ class Trainer(metaclass=AbstactFinalMeta):
         print('-'*15+'Module Parameter Sizes'+'-'*15)
         obj_vars = vars(self)
         for var_name, var_value in obj_vars:
-            if isinstance(var_value, nn.Module):
+            if isinstance(var_value, torch.Tensor):
+                var_value.to(self.device)
+
+            elif isinstance(var_value, nn.Module):
                 self.nn_module_names.add(var_name)
 
                 var_nparams = str(sum(p.numel() for p in var_value.parameters()))
@@ -113,8 +116,53 @@ class Trainer(metaclass=AbstactFinalMeta):
 
         return all_state_dicts
 
+    def save_state(self):
+        if self.checkpoint_dir == None:
+            return None
+
+        if on_epoch and self.save_frequency != None:
+            if self.current_epoch % self.save_frequency == 0:
+                all_state_dicts = self.get_state_dicts()
+                for name, state in all_state_dicts.items():
+                    torch.save(state, os.path.join(self.checkpoint_dir, name +  \
+                                                   f'_epoch{self.current_epoch}.pth'))  
+
+        if self.best_state != None:
+            for name, state in self.best_state.items():
+                torch.save(state, os.path.join(self.checkpoint_dir, name + f'_best.pth'))
+
+    def load_state(state, chckpt_suffix):
+        if chckpt_suffix:
+            # standardize suffix
+            chckpt_suffix = chckpt_suffix.split('.')[0] + '.pth'
+            if chckpt_suffix[0] != '_':
+                chckpt_suffix = '_' + chckpt_suffix
+
+            if self.checkpoint_dir == None:
+                raise Exception('Checkpoint directory must be set if checkpoint '
+                                'suffix is specified')
+        else:
+            if self.best_state == None:
+                raise Exception('No previous training and no checkpoint specified.')
+
+
+        for nn_module_name in self.nn_module_names:
+            if chckpt_suffix != None:
+                module_path = os.path.join(self.checkpoint_dir, nn_module_name + \
+                                           chckpt_suffix)
+                state = torch.load(module_path)
+            else:
+                state = self.best_state[nn_module_name]
+                
+            nn_module = getattr(self, nn_module_name)
+            nn_module.load_state_dict(state)
+            nn_module.to(self.device)
+
+
     @runtimefinal
     def fit(self, training_dataset, validation_dataset):
+        self.on_fit_start()
+
         self.initialize_run()
 
         train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
@@ -150,54 +198,29 @@ class Trainer(metaclass=AbstactFinalMeta):
                 self.validation_epoch_end(valid_outputs)
 
             self.current_epoch += 1
-            if self.save_frequency != None and self.current_epoch % self.save_frequency == 0:
-                all_state_dicts = self.get_state_dicts()
-                for name, state in all_state_dicts.items():
-                    torch.save(state, os.path.join(self.checkpoint_dir, name +  \
-                                                   f'_epoch{self.current_epoch}.pth'))
-
-        for name, state in best_state.items():
-            torch.save(state, os.path.join(self.checkpoint_dir, name + f'_best.pth'))
+            self.save_state()
+        
         self.best_state = best_state
+        self.save_state()
+
+        self.on_fit_end()
 
     @runtimefinal
     def test(self, testing_dataset, chckpt_suffix=None):
-        if chckpt_suffix:
-            # standardize suffix
-            chckpt_suffix = chckpt_suffix.split('.')[0] + '.pth'
-            if chckpt_suffix[0] != '_':
-                chckpt_suffix = '_' + chckpt_suffix
-
-            if self.checkpoint_dir == None:
-                raise Exception('Checkpoint directory must be set if checkpoint '
-                                'suffix is specified')
-        else:
-            if self.best_state == None:
-                raise Exception('No previous training and no checkpoint specified.')
-
+        self.on_test_start()
 
         self.initialize_run()
+        self.load_state(chckpt_suffix)
 
         test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
                                  shuffle=False, num_workers=self.n_cpus, 
                                  pin_memory=(self.use_gpu and self.pin_memory))
 
-        for nn_module_name in self.nn_module_names:
-            if chckpt_suffix != None:
-                module_path = os.path.join(self.checkpoint_dir, nn_module_name + \
-                                           chckpt_suffix)
-                state = torch.load(module_path)
-            else:
-                state = self.best_state[nn_module_name]
-                
-            nn_module = getattr(self, nn_module_name)
-            nn_module.load_state_dict(state)
-            nn_module.to(self.device)
-
-
         with torch.no_grad():
             test_outputs = self.data_loop(test_loader, 'eval', self.testing_step)
             self.testing_epoch_end(test_outputs)
+
+        self.on_test_end()
 
     @runtimefinal
     def data_loop(self, loader, phase, step_method, optim_list=[]):
@@ -250,6 +273,19 @@ class Trainer(metaclass=AbstactFinalMeta):
     def testing_epoch_end(self, testing_step_outputs):
         raise NotImplementedError
 
+    # User defined start/end routines
+    def on_fit_start(self):
+        pass
+
+    def on_fit_end(self):
+        pass
+
+    def on_test_start(self):
+        pass
+
+    def on_test_end(self):
+        pass
+
 
 def dfs_detree_optimizer_list(optimzers, max_depth=1):
     # Max depth set at 1 for PyTorchLightning compatibility
@@ -275,9 +311,5 @@ def dfs_detree_optimizer_list(optimzers, max_depth=1):
 
     if len(optim_list) == 0:
         raise ValueError('No optimizer has been set.')
-    elif 1 < len(sched_list) != len(optim_list):
-        raise ValueError('Scheduler and Optimizer lists cannot be broadcasted and have '
-                         'unequal lengths.') # Length 1 sched_list is understood as being 
-                                             # applied at once to all optimizers
 
     return optim_list, sched_list
