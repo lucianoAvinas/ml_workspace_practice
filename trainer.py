@@ -1,3 +1,4 @@
+import os
 import sys
 import torch
 import argparse
@@ -10,13 +11,13 @@ from utils import AbstactFinalMeta, runtimefinal, Result, seed_everything
 
 
 class Trainer(metaclass=AbstactFinalMeta):
-    def __init__(self, n_epochs, batch_size,n_cpus=0, use_gpu=False, checkpoint_dir=None,
+    def __init__(self, n_epochs, batch_size, n_cpus=0, use_gpu=False, checkpoint_dir=None,
                  save_frequency=None, tune_cuddn=False, set_deterministic=None, pin_memory=False):
         if save_frequency != None:
             assert save_frequency > 0
 
         self.n_epochs = n_epochs
-        self.batch_size
+        self.batch_size = batch_size
         self.n_cpus = n_cpus
         self.use_gpu = use_gpu
         self.checkpoint_dir = checkpoint_dir
@@ -42,7 +43,7 @@ class Trainer(metaclass=AbstactFinalMeta):
 
         si_units = [' ', 'k', 'M', 'G', 'T']
         print('-'*15+'Module Parameter Sizes'+'-'*15)
-        obj_vars = vars(self)
+        obj_vars = vars(self).items()
         for var_name, var_value in obj_vars:
             if isinstance(var_value, torch.Tensor):
                 setattr(self, var_name, var_value.to(self.device))
@@ -60,7 +61,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         print('-'*15+'-'*len('Module Parameter Sizes')+'-'*15)
 
     def update_trainer_parameters(self, new_loader_dict):
-        common_keys = set(param_dict.keys()) & set(self.trainer_args.keys())
+        common_keys = set(new_loader_dict.keys()) & set(self.trainer_args.keys())
 
         for key in common_keys:
             self.trainer_args[key] = new_loader_dict[key]
@@ -119,18 +120,17 @@ class Trainer(metaclass=AbstactFinalMeta):
         if self.checkpoint_dir == None:
             return None
 
-        if on_epoch and self.save_frequency != None:
-            if self.current_epoch % self.save_frequency == 0:
-                all_state_dicts = self.get_state_dicts()
-                for name, state in all_state_dicts.items():
-                    torch.save(state, os.path.join(self.checkpoint_dir, name +  \
-                                                   f'_epoch{self.current_epoch}.pth'))  
+        if self.save_frequency != None and self.current_epoch % self.save_frequency == 0:
+            all_state_dicts = self.get_state_dicts()
+            for name, state in all_state_dicts.items():
+                torch.save(state, os.path.join(self.checkpoint_dir, name +  \
+                                               f'_epoch{self.current_epoch}.pth'))
 
         if self.best_state != None:
             for name, state in self.best_state.items():
                 torch.save(state, os.path.join(self.checkpoint_dir, name + f'_best.pth'))
 
-    def load_state(state, chckpt_suffix):
+    def load_state(self, chckpt_suffix):
         if chckpt_suffix:
             # standardize suffix
             chckpt_suffix = chckpt_suffix.split('.')[0] + '.pth'
@@ -163,11 +163,11 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.on_fit_start()
         self.initialize_run()
 
-        train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
+        train_loader = DataLoader(training_dataset, batch_size=self.batch_size,
                                   shuffle=True, num_workers=self.n_cpus, 
                                   pin_memory=(self.use_gpu and self.pin_memory))
 
-        valid_loader = DataLoader(self.validation_dataset, batch_size=self.batch_size,
+        valid_loader = DataLoader(validation_dataset, batch_size=self.batch_size,
                                   shuffle=False, num_workers=self.n_cpus, 
                                   pin_memory=(self.use_gpu and self.pin_memory))
 
@@ -182,8 +182,8 @@ class Trainer(metaclass=AbstactFinalMeta):
                                            self.training_step, optim_list)
             self.training_epoch_end(train_outputs)
 
-            for sched in sched_list:
-                sched_list.step()
+            for scheduler in sched_list:
+                scheduler.step()
 
             with torch.no_grad():
                 valid_outputs = self.data_loop(valid_loader, 'eval', 
@@ -209,7 +209,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.initialize_run()
         self.load_state(chckpt_suffix)
 
-        test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
+        test_loader = DataLoader(testing_dataset, batch_size=self.batch_size,
                                  shuffle=False, num_workers=self.n_cpus, 
                                  pin_memory=(self.use_gpu and self.pin_memory))
 
@@ -283,7 +283,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         pass
 
 
-def dfs_detree_optimizer_list(optimzers, max_depth=1):
+def dfs_detree_optimizer_list(optimizers, max_depth=1):
     # Max depth set at 1 for PyTorchLightning compatibility
     optim_list = []
     sched_list = []

@@ -11,6 +11,9 @@ class TestResult(unittest.TestCase):
         res = Result(x)
         self.assertEqual(res.get_loss(), x)
 
+        res = Result(res)
+        self.assertEqual(res.get_loss(), x)
+
         res.loss = torch.tensor(25.)
         self.assertEqual(res.get_loss(), x)
 
@@ -35,6 +38,10 @@ class TestResult(unittest.TestCase):
 
         res.abc = torch.ones(5,5,5)
         self.assertEqual(torch.equal(res.abc[0], torch.ones(5,5,5)), True)
+
+        res = Result(res)
+        self.assertEqual(torch.equal(res.get_loss()[0], torch.tensor(3.14)), True)
+        self.assertEqual(torch.equal(res.abc[0], torch.ones(5, 5, 5)), True)
 
         res.abc = (x, x)
         self.assertEqual(iterable_torch_eq(res.abc, [(x, x)]), True)

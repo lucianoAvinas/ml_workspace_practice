@@ -44,7 +44,7 @@ AbstactFinalMeta = type('AbstactFinalMeta', (ABCMeta, RuntimeFinalMeta), {})
 class Result(object):
     def __init__(self, loss, to_cpu=True):
         if isinstance(loss, Result):
-            for key, val in vars(loss):
+            for key, val in vars(loss).items():
                 super().__setattr__(key, val)
         else:
             super().__setattr__('to_cpu', to_cpu)
@@ -108,7 +108,6 @@ def iterable_torch_eq(list1, list2):
         if isinstance(sublist1, torch.Tensor) or isinstance(sublist2, torch.Tensor):
             if not (isinstance(sublist1, torch.Tensor) and isinstance(sublist2, torch.Tensor)):
                 return False
-
             else:
                 return torch.equal(sublist1, sublist2)
 
@@ -120,9 +119,7 @@ def iterable_torch_eq(list1, list2):
             for i in range(len(sublist1)):
                 if equality == 0:
                     break
-
                 equality *= iterate(sublist1[i], sublist2[i])
-
             return equality
 
     return iterate(list1, list2)
