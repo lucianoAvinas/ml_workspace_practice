@@ -1,6 +1,7 @@
 import os
 import torch
 import random
+import warnings
 import numpy as np
 
 from abc import ABCMeta
@@ -41,25 +42,39 @@ AbstactFinalMeta = type('AbstactFinalMeta', (ABCMeta, RuntimeFinalMeta), {})
 
 
 class Result(object):
-    def __init__(self, loss, cpu_transfer=True):
+    def __init__(self, loss, to_cpu=True):
         if isinstance(loss, Result):
             for key, val in vars(loss):
                 super().__setattr__(key, val)
         else:
-            super().__setattr__('cpu_transfer', cpu_transfer)
-            super().__setattr__('loss', loss)
+            super().__setattr__('to_cpu', to_cpu)
+            super().__setattr__('_Result__loss', loss)
 
-    # Only takes tensors or an iterable object of tensors (not dicts)
-    # Introduces new step_dimension
     def __setattr__(self, name, value):
+        # Extra train_step dimension is added for collection process
+        # Iterable values are not preemptively concatenated in case
+        # individial elements are different dimensions.
+        if name == 'loss':
+            warnings.warn('\nLoss has been mangled as a private variable '
+                          'and cannot be accessed externally. Tampering '
+                          'with the mangled variable will affect Result\'s '
+                          'detaching and collection process.\n')
+
         if isinstance(value, torch.Tensor):
-            super().__setattr__(name,
-                [torch.Tensor([value.cpu().detach() if self.cpu_transfer
-                               else value.detach()])])
+            return super().__setattr__(name, [value.cpu().detach() if self.to_cpu
+                                       else value.detach()])
+        elif all(isinstance(subval, torch.Tensor) for subval in value):
+            return super().__setattr__(name, [[subval.cpu().detach() if self.to_cpu 
+                                       else subval.detach() for subval in value]])
         else:
-            super().__setattr__(name,
-                [torch.cat([subval.cpu().detach() if self.cpu_transfer
-                            else subval.detach() for subval in value])])
+            raise ValueError('Value set is not a torch.Tensor instance '
+                             'or an iterable object of torch.Tensors')
+
+    def detach_loss(self):
+        self.__loss = self.__loss # calls __setattr__
+
+    def get_loss(self):
+        return self.__loss
 
     @staticmethod
     def collect(result_list):
@@ -67,14 +82,15 @@ class Result(object):
         for result in result_list:
             var_dict = vars(result)
 
-            for key in var_dict:
+            for key in var_dict.keys():
                 if key not in coll_dict:
-                   coll_dict[key] = []
+                   coll_dict[key] = [] if key != 'to_cpu' else 0
 
                 coll_dict[key] += var_dict[key]
 
-        coll_dict.pop('cpu_transfer', None)
-        return namedtuple('CollectedResults', coll_dict.keys())(coll_dict.values())
+        coll_dict.pop('to_cpu', None)
+        coll_dict['loss'] = coll_dict.pop('_Result__loss')
+        return namedtuple('CollectedResults', coll_dict.keys())(**coll_dict)
 
 
 def get_group_dicts(args, parser):
@@ -85,6 +101,31 @@ def get_group_dicts(args, parser):
         arg_groups[group.title] = group_dict
 
     return arg_groups
+
+
+def iterable_torch_eq(list1, list2):
+    def iterate(sublist1, sublist2):
+        if isinstance(sublist1, torch.Tensor) or isinstance(sublist2, torch.Tensor):
+            if not (isinstance(sublist1, torch.Tensor) and isinstance(sublist2, torch.Tensor)):
+                return False
+
+            else:
+                return torch.equal(sublist1, sublist2)
+
+        elif len(sublist1) != len(sublist2):
+            return False
+
+        else:
+            equality = 1
+            for i in range(len(sublist1)):
+                if equality == 0:
+                    break
+
+                equality *= iterate(sublist1[i], sublist2[i])
+
+            return equality
+
+    return iterate(list1, list2)
 
 
 def seed_everything(seed=None):
@@ -107,14 +148,14 @@ def seed_everything(seed=None):
             seed = os.environ.get("PL_GLOBAL_SEED", random.randint(min_seed_value, max_seed_value))
         seed = int(seed)
     except (TypeError, ValueError):
-        seed = _select_seed_randomly(min_seed_value, max_seed_value)
+        seed = random.randint(min_seed_value, max_seed_value)
 
     if (seed > max_seed_value) or (seed < min_seed_value):
-        log.warning(
+        warnings.warn(
             f"{seed} is not in bounds, \
             numpy accepts from {min_seed_value} to {max_seed_value}"
         )
-        seed = _select_seed_randomly(min_seed_value, max_seed_value)
+        seed = random.randint(min_seed_value, max_seed_value)
 
     os.environ["PYTHONHASHSEED"] = str(seed)
     os.environ["PL_GLOBAL_SEED"] = str(seed)

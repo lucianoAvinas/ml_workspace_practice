@@ -45,7 +45,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         obj_vars = vars(self)
         for var_name, var_value in obj_vars:
             if isinstance(var_value, torch.Tensor):
-                var_value.to(self.device)
+                setattr(self, var_name, var_value.to(self.device))
 
             elif isinstance(var_value, nn.Module):
                 self.nn_module_names.add(var_name)
@@ -110,8 +110,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         for nn_module_name in self.nn_module_names:
             nn_module = getattr(self, nn_module_name)
 
-            nn_module.cpu()
-            all_state_dicts[nn_module_name] = nn_module.state_dict()
+            all_state_dicts[nn_module_name] = nn_module.cpu().state_dict()
             nn_module.to(self.device)
 
         return all_state_dicts
@@ -162,7 +161,6 @@ class Trainer(metaclass=AbstactFinalMeta):
     @runtimefinal
     def fit(self, training_dataset, validation_dataset):
         self.on_fit_start()
-
         self.initialize_run()
 
         train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
@@ -177,7 +175,8 @@ class Trainer(metaclass=AbstactFinalMeta):
         optim_list, sched_list = dfs_detree_optimizer_list(optimizers)
 
         self.best_validation = sys.float_info.max
-        best_state = None
+        self.best_state = None
+        leading_state = None
         for _ in range(self.n_epochs):
             train_outputs = self.data_loop(train_loader, 'train', 
                                            self.training_step, optim_list)
@@ -193,22 +192,20 @@ class Trainer(metaclass=AbstactFinalMeta):
                 curr_validation = self.compute_validation(valid_outputs)
                 if curr_validation < self.best_validation:
                     self.best_validation = curr_validation
-                    best_state = self.get_state_dicts()
+                    leading_state = self.get_state_dicts()
                             
                 self.validation_epoch_end(valid_outputs)
 
             self.current_epoch += 1
             self.save_state()
         
-        self.best_state = best_state
+        self.best_state = leading_state
         self.save_state()
-
         self.on_fit_end()
 
     @runtimefinal
     def test(self, testing_dataset, chckpt_suffix=None):
         self.on_test_start()
-
         self.initialize_run()
         self.load_state(chckpt_suffix)
 
@@ -232,7 +229,7 @@ class Trainer(metaclass=AbstactFinalMeta):
 
         all_results = [None] * len(loader)
         for batch_idx, batch in enumerate(loader):
-            batch.to(self.device)
+            batch = batch.to(self.device)
             step_result = Result(step_method(batch, batch_idx))
 
             for i in range(len(optim_list)):
@@ -240,8 +237,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                 optim_list[i].step()
                 optim_list[i].zero_grad()
 
-            # This handles detach and to_cpu logic through __setattr__
-            step_result.loss = step_result.loss
+            step_result.detach_loss()
             all_results[batch_idx] = step_result
 
         collected_results = Result.collect(all_results)
