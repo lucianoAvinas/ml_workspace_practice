@@ -10,8 +10,7 @@ from abc import abstractmethod
 from utils import new_folder
 from collections.abc import Iterable
 from torch.utils.data import DataLoader
-from trainer_utils import AbstactFinalMeta, runtimefinal, \
-                          Result, seed_everything
+from trainer_utils import AbstactFinalMeta, runtimefinal, Result, seed_everything
 
 
 class Trainer(metaclass=AbstactFinalMeta):
@@ -45,6 +44,9 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.best_validation = None
         self.best_state = None
 
+        self.optim_list = None
+        self.sched_list = None
+
     def initialize_trainer(self):
         if self.deterministic_seed != None:
             torch.backends.cudnn.benchmark = False
@@ -56,6 +58,9 @@ class Trainer(metaclass=AbstactFinalMeta):
 
     def __setattr__(self, name, value):
         if isinstance(value, nn.Module) or isinstance(value, torch.Tensor):
+            # does not add module or parameter to optimizer(s)
+            # its better practice handle all dynamic growth within a module
+            # and assign this module parameters in configure_optimizer
             object.__setattr__(self, name, value.to(self.device))
         else:
             object.__setattr__(self, name, value)
@@ -192,21 +197,8 @@ class Trainer(metaclass=AbstactFinalMeta):
                 submodule.load_state_dict(state)
                 submodule.to(self.device)
 
-    def optim_mapping_order(self, n_optims):
-        # If number of losses known beforehand or if
-        # one optim used for multiple losses this can
-        # be changed appropriately.
-
-        # Ex: train_step returns D_loss, G_loss
-        # return optimizers in dfs order D_optim, G_optim
-        # for trainer to work right of the box.
-
-        return lambda x: min(x, n_optims-1)
-
     @runtimefinal
     def fit(self, training_dataset, validation_dataset):
-        self.on_fit_start()
-
         self.training_dataset = training_dataset
         self.validation_dataset = validation_dataset
 
@@ -219,8 +211,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                                   pin_memory=(self.use_gpu and self.pin_memory))
 
         optimizers = self.configure_optimizers()
-        optim_list, sched_list = dfs_detree_optimizer_list(optimizers)
-        self.optim_mapping = self.optim_mapping_order(len(optim_list))
+        self.optim_list, self.sched_list = dfs_detree_optimizer_list(optimizers)
 
         self.best_validation = sys.float_info.max
         self.best_state = None
@@ -228,12 +219,13 @@ class Trainer(metaclass=AbstactFinalMeta):
 
         print(self)
 
+        self.on_fit_start()
         for self.current_epoch in range(self.n_epochs):
             train_outputs = self.data_loop(train_loader, 'train', 
-                                           self.training_step, optim_list)
+                                           self.training_step)
             self.training_epoch_end(train_outputs)
 
-            for scheduler in sched_list:
+            for scheduler in self.sched_list:
                 scheduler.step()
 
             with torch.no_grad():
@@ -261,7 +253,6 @@ class Trainer(metaclass=AbstactFinalMeta):
 
     @runtimefinal
     def test(self, testing_dataset, chckpt_suffix=None):
-        self.on_test_start()
         self.load_state(chckpt_suffix)
 
         self.testing_dataset = testing_dataset
@@ -269,7 +260,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
                                  shuffle=False, num_workers=self.n_cpus, 
                                  pin_memory=(self.use_gpu and self.pin_memory))
-
+        self.on_test_start()
         with torch.no_grad():
             test_outputs = self.data_loop(test_loader, 'eval', self.testing_step)
             self.testing_epoch_end(test_outputs)
@@ -277,7 +268,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.on_test_end()
 
     @runtimefinal
-    def data_loop(self, loader, phase, step_method, optim_list=[]):
+    def data_loop(self, loader, phase, step_method):
         for submodule in vars(self).values():
             if isinstance(submodule, nn.Module):
                 getattr(submodule, phase)()
@@ -305,19 +296,43 @@ class Trainer(metaclass=AbstactFinalMeta):
 
             if phase == 'train':
                 step_loss = step_result.get_loss()
-
+                optim_mapping = self.optim_index_mapping()
+                
                 for i in range(len(step_loss)):
-                    optim_ind = self.optim_mapping(i)
+                    optim_ind = optim_mapping(i)
 
-                    optim_list[optim_ind].zero_grad()
+                    self.optim_list[optim_ind].zero_grad()
                     step_loss[i].backward()
-                    optim_list[optim_ind].step()
+                    self.optim_list[optim_ind].step()
 
             step_result.detach_loss()
             all_results[batch_idx] = step_result
 
         collected_results = Result.collect(all_results)
         return collected_results
+
+    def optim_index_mapping(self):
+        # If number of losses known beforehand
+        # this can be changed appropriately.
+
+        # For out of the box use
+        # Ex: train_step returns D_loss, G_loss
+        # return optimizers in dfs order D_optim, G_optim
+
+        return lambda x: min(x, len(self.optim_list)-1)
+
+    @staticmethod
+    def join_parameters(lst_of_modules):
+        lst_of_parameters = []
+        for module in lst_of_modules:
+            if isinstance(module, nn.Module):
+                lst_of_parameters += list(module.parameters())
+            elif isinstance(module, nn.Parameter):
+                lst_of_parameters += [module]
+            else:
+                raise ValueError('list must be composed of torch.nn.Module '
+                                 'objects and torch.nn.Parameter objects.')
+        return lst_of_parameters
 
     @abstractmethod
     def configure_optimizers(self):
