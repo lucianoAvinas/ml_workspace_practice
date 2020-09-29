@@ -59,8 +59,8 @@ class Trainer(metaclass=AbstactFinalMeta):
     def __setattr__(self, name, value):
         if isinstance(value, nn.Module) or isinstance(value, torch.Tensor):
             # does not add module or parameter to optimizer(s)
-            # its better practice handle all dynamic growth within a module
-            # and assign this module parameters in configure_optimizer
+            # its better practice to handle all dynamic growth within a module.
+            # This module is assigned in configure_optimizer
             object.__setattr__(self, name, value.to(self.device))
         else:
             object.__setattr__(self, name, value)
