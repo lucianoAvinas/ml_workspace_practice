@@ -10,14 +10,14 @@ from utils import get_group_dicts, ImagePool
 
 
 class SimpleGAN(Trainer):
-	def __init__(self, parsed_args, parsed_groups):
-		super().__init__(**parsed_groups['trainer arguments'])
+    def __init__(self, parsed_args, parsed_groups):
+        super().__init__(**parsed_groups['trainer arguments'])
 
-		self.gen = UNetGenerator(**parsed_groups['generator arguments'])
-		self.disc = NLayerDiscriminator(**parsed_groups['discriminator arguments'])
+        self.gen = UNetGenerator(**parsed_groups['generator arguments'])
+        self.disc = NLayerDiscriminator(**parsed_groups['discriminator arguments'])
 
-		self.parsed_args = parsed_args
-		self.vis = Visualizer()
+        self.parsed_args = parsed_args
+        self.vis = Visualizer()
 
     def configure_optimizers(self):
         opt1 = torch.optim.Adam(self.gen.parameters(), lr=self.parsed_args.lr)
