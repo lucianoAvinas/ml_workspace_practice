@@ -1,12 +1,14 @@
 import torch
+import random
 
 from trainer import Trainer
 from datasets import CtDataset
+from trainer_utils import Result
 from visualizer import Visualizer
 from parser_options import parser
 from unet_gen import UNetGenerator
 from patch_disc import NLayerDiscriminator
-from utils import get_group_dicts, ImagePool
+from utils import get_group_dicts, ImagePool, init_weights
 
 
 class SimpleGAN(Trainer):
@@ -16,12 +18,25 @@ class SimpleGAN(Trainer):
         self.gen = UNetGenerator(**parsed_groups['generator arguments'])
         self.disc = NLayerDiscriminator(**parsed_groups['discriminator arguments'])
 
-        self.parsed_args = parsed_args
-        self.vis = Visualizer()
+        init_weights(self.gen)
+        init_weights(self.disc)
 
+        self.real_label = torch.tensor(1.0)
+        self.fake_label = torch.tensor(0.0)
+
+        self.crit = torch.nn.MSELoss() # LSGAN
+        self.image_pool = ImagePool(parsed_args.pool_size, parsed_args.replay_prob)
+
+        self.sel_ind = 0
+        self.un_normalize = lambda x: (1 + x.clamp(min=-1, max=1))/2.
+
+        self.parsed_args = parsed_args
+        self.n_vis = parsed_args.n_vis
+        self.vis = Visualizer()
+        
     def configure_optimizers(self):
-        opt1 = torch.optim.Adam(self.gen.parameters(), lr=self.parsed_args.lr)
-        opt2 = torch.optim.Adam(self.disc.parameters(), lr=self.parsed_args.lr)
+        opt1 = torch.optim.Adam(self.disc.parameters(), lr=self.parsed_args.lr)
+        opt2 = torch.optim.Adam(self.gen.parameters(), lr=self.parsed_args.lr)
 
         N = self.parsed_args.n_epochs
         N_start = int(N * self.parsed_args.frac_decay_start)
@@ -32,21 +47,76 @@ class SimpleGAN(Trainer):
 
         return opt1, opt2, sched1, sched2
 
-
     def on_fit_start(self):
         self.vis.start()
 
+    def on_fit_end(self):
+        self.vis.stop()
+
+    def _shared_step(X, Y_fake, Y_real, is_train=False):
+        res = Result()
+
+        if is_train:
+            Y_pool = self.image_pool(Y_fake.detach())
+        else:
+            Y_pool = Y_fake
+
+        real_label = self.real_label.expand(X.size()[0])
+        fake_label = self.fake_label.expand(X.size()[0])
+
+        disc_loss = 0.5 * (self.crit(self.disc(Y_real), real_label) + \
+                           self.crit(self.disc(Y_pool), fake_label))
+
+        if is_train:
+            res.step(disc_loss)
+        res.disc_loss = disc_loss
+
+        disc_class = self.disc(Y_fake)
+        gen_loss = self.crit(disc_class, real_label)
+
+        if is_train:
+            res.step(gen_loss)
+        res.gen_loss = gen_loss
+
+        return res
+
     def training_step(self, batch, batch_idx):
-        pass
+        X, Y_real = batch
+        Y_fake = self.gen(X)
+        
+        res = self._shared_step(X, Y_fake, Y_real)
+
+        if batch_idx == 0:
+            res.img = [self.un_normalize(X[:self.n_vis]),
+                       self.un_normalize(Y_fake[:self.n_vis]),
+                       self.un_normalize(Y_real[:self.n_vis])]
+
+        return res
 
     def training_epoch_end(self, training_outputs):
-        pass
+        #loss = torch.mean(training_step_outputs.loss) # break into gen and disc
+        collated = torch.cat(training_outputs.img[0], dim=3)
+        #self.vis.show_image('Train Images', collated_imgs)
 
     def validation_step(self, batch, batch_idx):
-        pass
+        X, Y_real = batch
+        Y_fake = self.gen(X)
+
+        res = self._shared_step(X, Y_fake, Y_real, is_eval=True)
+        res.recon_error = self.crit(Y_real, Y_fake)
+
+        if batch_idx == self.sel_ind:
+            res.img = [self.un_normalize(X[:self.n_vis]),
+                       self.un_normalize(Y_fake[:self.n_vis]),
+                       self.un_normalize(Y_real[:self.n_vis])]
+
+        return res
 
     def validation_epoch_end(self, validation_outputs):
-        pass
+        collated = torch.cat(validation_outputs.img[0], dim=3)
+        self.sel_ind = random.randint(0, 
+                              len(self.validation_dataset) - 1)
+        # return recon error
 
 
 parser = Trainer.add_trainer_args(parser)

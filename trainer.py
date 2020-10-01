@@ -6,8 +6,9 @@ import warnings
 import argparse
 import torch.nn as nn
 
-from abc import abstractmethod
+from tqdm import tqdm
 from utils import new_folder
+from abc import abstractmethod
 from collections.abc import Iterable
 from torch.utils.data import DataLoader
 from trainer_utils import AbstactFinalMeta, runtimefinal, Result, seed_everything
@@ -16,10 +17,7 @@ from trainer_utils import AbstactFinalMeta, runtimefinal, Result, seed_everythin
 class Trainer(metaclass=AbstactFinalMeta):
     def __init__(self, n_epochs, batch_size, n_cpus=0, use_gpu=False, checkpoint_dir=None,
                  save_frequency=None, tune_cuddn=False, deterministic_seed=None, 
-                 pin_memory=False, extended_save=False):
-        if save_frequency != None:
-            assert save_frequency > 0
-
+                 pin_memory=False):
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.n_cpus = n_cpus
@@ -29,13 +27,11 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.tune_cuddn = tune_cuddn
         self.deterministic_seed = deterministic_seed
         self.pin_memory = pin_memory
-        self.extended_save = extended_save
 
         self.initialize_trainer()
 
         self.current_epoch = 0
         self.device = torch.device('cuda:0' if use_gpu else 'cpu')
-        self.optim_mapping = None
 
         self.training_dataset = None
         self.validation_dataset = None
@@ -120,12 +116,10 @@ class Trainer(metaclass=AbstactFinalMeta):
                                        'cudnn for deterministic alternative')
         trainer_args.add_argument('--pin_memory', action='store_true',
                                   help='Sets DataLoader pin_memory to true.')
-        trainer_args.add_argument('--extended_save', action='store_true',
-                                  help='Includes all Trainer instance variables that '
-                                       'are torch.tensor objects in the Trainer save '
-                                       'operation. This includes torch.nn.Parameter '
-                                       'objects.')
-        return parser
+
+    def to_device(self):
+        for name, submodule in vars(self).items():
+            self.__setattr__(name, submodule)
 
     def get_state_dicts(self):
         all_state_dicts = dict()
@@ -133,9 +127,6 @@ class Trainer(metaclass=AbstactFinalMeta):
             if isinstance(submodule, nn.Module) and count_params(submodule) > 0:
                 all_state_dicts[name] = submodule.cpu().state_dict()
                 submodule.to(self.device)
-
-            elif self.extended_save and isinstance(submodule, torch.Tensor):
-                all_state_dicts[name] = submodule.cpu()
 
         return all_state_dicts
 
@@ -190,7 +181,7 @@ class Trainer(metaclass=AbstactFinalMeta):
             submodule_name = pth_to_name(submod_pth)
   
             submodule = getattr(self, submodule_name, None)
-            if submodule == None or isinstance(submodule, torch.Tensor):
+            if submodule == None:
                 setattr(self, submodule_name, state.to(self.device))
 
             elif isinstance(submodule, nn.Module):
@@ -205,13 +196,16 @@ class Trainer(metaclass=AbstactFinalMeta):
         train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
                                   shuffle=True, num_workers=self.n_cpus, 
                                   pin_memory=(self.use_gpu and self.pin_memory))
-
+        
         valid_loader = DataLoader(self.validation_dataset, batch_size=self.batch_size,
                                   shuffle=False, num_workers=self.n_cpus, 
                                   pin_memory=(self.use_gpu and self.pin_memory))
 
         optimizers = self.configure_optimizers()
         self.optim_list, self.sched_list = dfs_detree_optimizer_list(optimizers)
+
+        Result.optim_list = self.optim_list
+        Result.reset_phase()
 
         self.best_validation = sys.float_info.max
         self.best_state = None
@@ -220,6 +214,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         print(self)
 
         self.on_fit_start()
+        self.to_device()
         for self.current_epoch in range(self.n_epochs):
             train_outputs = self.data_loop(train_loader, 'train', 
                                            self.training_step)
@@ -233,15 +228,12 @@ class Trainer(metaclass=AbstactFinalMeta):
                                                self.validation_step)
                 computed_valid = self.validation_epoch_end(valid_outputs)
 
-                if isinstance(computed_valid, torch.Tensor):
-                    computed_valid = computed_valid.item()
 
                 if computed_valid == None:
                     warnings.warn('\n If no aggregate loss is returned by '
                                   'validation_epoch_end, then Trainer can\'t '
                                   'keep track of best validation state.')
-
-                elif computed_valid < self.best_validation:
+                elif computed_valid.item() < self.best_validation:
                     self.best_validation = computed_valid 
                     leading_state = self.get_state_dicts()
 
@@ -260,7 +252,10 @@ class Trainer(metaclass=AbstactFinalMeta):
         test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
                                  shuffle=False, num_workers=self.n_cpus, 
                                  pin_memory=(self.use_gpu and self.pin_memory))
+        Result.reset_phase()
+
         self.on_test_start()
+        self.to_device()
         with torch.no_grad():
             test_outputs = self.data_loop(test_loader, 'eval', self.testing_step)
             self.testing_epoch_end(test_outputs)
@@ -274,7 +269,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                 getattr(submodule, phase)()
 
         all_results = [None] * len(loader)
-        for batch_idx, batch in enumerate(loader):
+        for batch_idx, batch in tqdm(enumerate(loader), ascii=True, desc=phase):
             if isinstance(batch, torch.Tensor):
                 batch = batch.to(self.device)
 
@@ -292,37 +287,18 @@ class Trainer(metaclass=AbstactFinalMeta):
                                  'collection compatible types must have '
                                  'torch.Tensor items.')
 
-            step_result = Result(step_method(batch, batch_idx))
+            step_result = step_method(batch, batch_idx)
+            Result.reset_phase()
 
-            if phase == 'train':
-                step_loss = step_result.get_loss()
-                optim_mapping = self.optim_index_mapping()
-                
-                for i in range(len(step_loss)):
-                    optim_ind = optim_mapping(i)
-
-                    self.optim_list[optim_ind].zero_grad()
-                    step_loss[i].backward()
-                    self.optim_list[optim_ind].step()
-
-            step_result.detach_loss()
             all_results[batch_idx] = step_result
 
         collected_results = Result.collect(all_results)
         return collected_results
 
-    def optim_index_mapping(self):
-        # If number of losses known beforehand
-        # this can be changed appropriately.
-
-        # For out of the box use
-        # Ex: train_step returns D_loss, G_loss
-        # return optimizers in dfs order D_optim, G_optim
-
-        return lambda x: min(x, len(self.optim_list)-1)
-
     @staticmethod
     def join_parameters(lst_of_modules):
+        # helper function to concat different learnable parameters
+        # into one optimizer
         lst_of_parameters = []
         for module in lst_of_modules:
             if isinstance(module, nn.Module):
