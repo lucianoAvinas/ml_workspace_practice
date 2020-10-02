@@ -62,17 +62,6 @@ class TestTrainer(unittest.TestCase):
         self.assertNotIn('param', all_states)
         self.assertTrue(all(getattr(dt, key).weight.is_cuda 
                             for key in all_states.keys()))
-
-        dt = DummyTrainer(0, 2, use_gpu=True, extended_save=True)
-        dt.param = torch.nn.Parameter(torch.ones(5))
-
-        all_states = dt.get_state_dicts()
-        self.assertIn('const', all_states.keys())
-        self.assertIn('param', all_states.keys())
-        self.assertFalse(all_states['const'].is_cuda)
-        self.assertFalse(all_states['param'].is_cuda)
-        self.assertTrue(dt.const.is_cuda)
-        self.assertTrue(dt.param.is_cuda)
     
     def test_save_state(self):
         dt = DummyTrainer(1, 2, checkpoint_dir='tests/ex', 
@@ -94,39 +83,15 @@ class TestTrainer(unittest.TestCase):
 
         shutil.rmtree('tests/ex')
 
-        dt =  DummyTrainer(6, 2, checkpoint_dir='tests/ex', 
-                           save_frequency=3, extended_save=True)
-        with suppress_stdout():
-            dt.fit(dd1, dd2)
-        dir_w_pths = os.listdir('tests/ex/epoch_3')
-        self.assertIn('model1_epoch_3.pth', dir_w_pths)
-        self.assertIn('model2_epoch_3.pth', dir_w_pths)
-        self.assertIn('const_epoch_3.pth', dir_w_pths)
-        self.assertNotIn('crit_epoch_3.pth', dir_w_pths)
-
-        dir_w_pths = os.listdir('tests/ex/epoch_6')
-        self.assertIn('model1_epoch_6.pth', dir_w_pths)
-        self.assertIn('model2_epoch_6.pth', dir_w_pths)
-        self.assertIn('const_epoch_6.pth', dir_w_pths)
-        self.assertNotIn('crit_epoch_6.pth', dir_w_pths)
-
-        dir_w_pths = os.listdir('tests/ex/best_state')
-        self.assertIn('model1_best_state.pth', dir_w_pths)
-        self.assertIn('model2_best_state.pth', dir_w_pths)
-        self.assertIn('const_best_state.pth', dir_w_pths)
-        self.assertNotIn('crit_best_state.pth', dir_w_pths)
-
-        shutil.rmtree('tests/ex')
-
     def test_load_state(self):
-        dt =  DummyTrainer(6, 2, extended_save=True)
+        dt =  DummyTrainer(6, 2)
         dd1, dd2 = DummyDataset(), DummyDataset()
         with suppress_stdout():
             dt.fit(dd1, dd2)
-        dt.test(dd1) # should throw no error
+        dt.test(dd1)
 
         dt =  DummyTrainer(6, 2, checkpoint_dir='tests/ex',
-                           save_frequency=3, extended_save=True)
+                           save_frequency=3)
         with suppress_stdout():
             dt.fit(dd1, dd2)
         dt.test(dd1, 'epoch_3')

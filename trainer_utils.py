@@ -78,6 +78,11 @@ class Result(object):
 
     @classmethod
     def collect(cls, result_list):
+        if any(not isinstance(result, Result) for result in result_list):
+            warnings.warn('Collection Failure: Only one Result must be '
+                          'returned by each step method.')
+            return None
+
         coll_dict = {}  
         for result in result_list:
             var_dict = vars(result)

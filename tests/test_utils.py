@@ -6,75 +6,66 @@ from utils import iterable_torch_eq
 
 
 class TestResult(unittest.TestCase):
-    def test_init(self):
-        x = torch.tensor(3.14)
-
-        res = Result(x)
-        self.assertEqual(res.get_loss()[0], x)
-
-        res = Result(res)
-        self.assertEqual(res.get_loss()[0], x)
-
-        res.loss = torch.tensor(25.)
-        self.assertEqual(res.get_loss()[0], x)
-
-        if torch.cuda.is_available():
-            x = torch.tensor(3.14).cuda()
-            res = Result(x)
-
-            res.detach_loss()
-            self.assertFalse(res.get_loss()[0].is_cuda)
-            self.assertTrue(x.is_cuda)
-
-            gpu_res = Result(x, to_cpu=False)
-            gpu_res.detach_loss()
-            self.assertTrue(gpu_res.get_loss()[0].is_cuda)
-
-    def test_set(self):
-        x = torch.tensor(3.14)
-        res = Result(x)
-
-        res.detach_loss()
-        self.assertTrue(torch.equal(res.get_loss()[0], torch.tensor(3.14)))
+    def test_setattr(self):
+        res = Result()
 
         res.abc = torch.ones(5,5,5)
         self.assertTrue(torch.equal(res.abc[0], torch.ones(5,5,5)))
 
-        res = Result(res)
-        self.assertTrue(torch.equal(res.get_loss()[0], torch.tensor(3.14)))
-        self.assertTrue(torch.equal(res.abc[0], torch.ones(5, 5, 5)))
-
+        x = torch.tensor(3.14)
         res.abc = (x, x)
         self.assertTrue(iterable_torch_eq(res.abc, [(x, x)]))
 
         res.abc = (torch.ones(5).cuda(), torch.ones(5).cuda())
         self.assertFalse(res.abc[0][1].is_cuda)
 
-        if torch.cuda.is_available():
-            gpu_res = Result(torch.tensor(5.), to_cpu=False)
+    def test_step(self):
+        m = torch.nn.Linear(5,5)
+        x = torch.ones(5)
+        opt1 = torch.optim.Adam(m.parameters(), lr=0.1)
+        opt2 = torch.optim.Adam(m.parameters(), lr=0.1)
+        Result.optim_list = [opt1, opt2]
+        z = m.weight.data.clone()
 
-            gpu_res.abc = (torch.ones(5).cuda(), torch.ones(5).cuda())
-            self.assertTrue(gpu_res.abc[0][1].is_cuda)
+        res = Result()
+        y0 = m(x)
+        y = torch.mean(y0*y0)
+        res.step(y)
+        res2 = Result()
+        self.assertEqual(res.optim_phase, 1)
+        self.assertEqual(res2.optim_phase, 1)
+        self.assertFalse(torch.equal(m.weight.data, z))
+        z = m.weight.data.clone()
+
+        y0 = m(x)
+        y = torch.mean(y0*y0)
+        res.step(y)
+        self.assertEqual(res.optim_phase, 0)
+        self.assertEqual(res2.optim_phase, 0)
+        self.assertFalse(torch.equal(m.weight.data, z))
+        z = m.weight.data.clone()
+
+        y0 = m(x)
+        y = torch.mean(y0*y0)
+        res.step(y, 0)
+        self.assertEqual(res.optim_phase, 0)
+        self.assertEqual(res2.optim_phase, 0)
+        self.assertFalse(torch.equal(m.weight.data, z))
 
     def test_collect(self):
-        res1 = Result(torch.tensor(3.14))
-        res1.loss = torch.tensor(97.)
+        res1 = Result()
         res1.a = torch.tensor(5.)
         res1.b = [torch.zeros(3,3)]
         res1.c = [torch.tensor(5.), torch.tensor(4.)]
-        res1.detach_loss()
 
-        res2 = Result((torch.tensor(1.), torch.tensor(2.)))
+        res2 = Result()
         res2.a = torch.tensor(5.)
         res2.b = torch.zeros(3,3)
         res2.c = [torch.tensor(5.), torch.tensor(4.)]
-        res2.detach_loss()
 
-        res3 = Result(torch.tensor(99.))
+        res3 = Result()
         res3.f = torch.zeros(5)
         res3.ab = [torch.ones(4)]
-        res3.detach_loss()
-
         coll_res = Result.collect([res1, res2, res3])
 
         self.assertTrue(iterable_torch_eq(coll_res.a,
@@ -86,6 +77,6 @@ class TestResult(unittest.TestCase):
                                  [torch.tensor(5.), torch.tensor(4.)]]))
         self.assertTrue(iterable_torch_eq(coll_res.f, [torch.zeros(5)]))
         self.assertTrue(iterable_torch_eq(coll_res.ab, [[torch.ones(4)]]))
-        self.assertTrue(iterable_torch_eq(coll_res.loss, [torch.tensor(3.14),
-                                (torch.tensor(1.), torch.tensor(2.)),
-                                 torch.tensor(99.)]))
+
+        coll_res = Result.collect([res1, None, res2])
+        self.assertEqual(coll_res, None)

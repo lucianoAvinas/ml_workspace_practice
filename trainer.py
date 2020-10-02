@@ -179,8 +179,8 @@ class Trainer(metaclass=AbstactFinalMeta):
         for submod_pth in submod_pths:
             state = state_generator(submod_pth)
             submodule_name = pth_to_name(submod_pth)
-  
             submodule = getattr(self, submodule_name, None)
+
             if submodule == None:
                 setattr(self, submodule_name, state.to(self.device))
 
@@ -228,11 +228,11 @@ class Trainer(metaclass=AbstactFinalMeta):
                                                self.validation_step)
                 computed_valid = self.validation_epoch_end(valid_outputs)
 
-
                 if computed_valid == None:
                     warnings.warn('\n If no aggregate loss is returned by '
                                   'validation_epoch_end, then Trainer can\'t '
                                   'keep track of best validation state.')
+
                 elif computed_valid.item() < self.best_validation:
                     self.best_validation = computed_valid 
                     leading_state = self.get_state_dicts()

@@ -22,14 +22,13 @@ class DummyDataset(Dataset):
 class DummyTrainer(Trainer):
     def __init__(self, n_epochs, batch_size, use_gpu=False,
                  checkpoint_dir=None, save_frequency=None, 
-                 deterministic_seed=None, extended_save=False):
+                 deterministic_seed=None):
 
         super().__init__(n_epochs, batch_size, 
                          use_gpu=use_gpu,
                          checkpoint_dir=checkpoint_dir,
                          save_frequency=save_frequency, 
-                         deterministic_seed=deterministic_seed,
-                         extended_save=extended_save)
+                         deterministic_seed=deterministic_seed)
 
         self.model1 = nn.Linear(10, 20)
         self.model2 = nn.Linear(20,20)
@@ -51,7 +50,8 @@ class DummyTrainer(Trainer):
 
         loss = self.crit(y2, y)
 
-        res = Result(loss)
+        res = Result()
+        res.step(loss)
         res.abc = [torch.ones(2), torch.zeros(2)]
         return res
 
@@ -61,7 +61,9 @@ class DummyTrainer(Trainer):
     def validation_step(self, batch, batch_idx):
         x = torch.ones(5, requires_grad=True)
         x = x*x
-        return x
+        res = Result()
+        res.loss = x
+        return res
 
     def validation_epoch_end(self, validation_step_outputs):
         self.all_valid = validation_step_outputs

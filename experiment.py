@@ -117,6 +117,7 @@ class SimpleGAN(Trainer):
         self.sel_ind = random.randint(0, 
                               len(self.validation_dataset) - 1)
         # return recon error
+        return torch.mean(validation_outputs.recon_error)
 
 
 parser = Trainer.add_trainer_args(parser)
