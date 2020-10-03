@@ -27,7 +27,7 @@ class VisServer(object):
         logging.info('Started instance')
         print('\nSearch "<server-id>:'+str(self.port)+'" in browser for a '\
               'training visualization.')
-        print('If running locally, <server-id> = localhost.')
+        print('If running locally, <server-id> = localhost.\n')
         loop.start()
         http_server.stop()
         logging.info('Ended instance')
@@ -53,7 +53,7 @@ class Visualizer(object):
         self.server.proc.terminate()
 
     def plot(self, line_name, win_name, x, y, is_log=True):
-        y_x = ('Log ' if is_log else '') + 'Loss'
+        y_ax = ('Log ' if is_log else '') + 'Loss'
         if win_name not in self.windows:
             yaxis_dict = {'title': y_ax}
             if is_log:

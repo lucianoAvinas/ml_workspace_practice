@@ -33,9 +33,9 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.current_epoch = 0
         self.device = torch.device('cuda:0' if use_gpu else 'cpu')
 
-        self.training_dataset = None
-        self.validation_dataset = None
-        self.testing_dataset = None
+        self.training_dataloader = None
+        self.validation_dataloader = None
+        self.testing_dataloader = None
 
         self.best_validation = None
         self.best_state = None
@@ -79,7 +79,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                             f'{n_params[:len(n_params) - 3*unit_ind]}' + \
                             f'{si_units[unit_ind]}\n'
 
-        coll_str += '-'*10+'-'*len('Module Parameter Sizes')+'-'*10+'\n'
+        coll_str += '-'*10+'-'*len('Module Parameter Sizes')+'-'*10
         return coll_str
 
     def update_trainer_params(self, new_loader_dict):
@@ -91,31 +91,31 @@ class Trainer(metaclass=AbstactFinalMeta):
 
     @staticmethod
     def add_trainer_args(parent_parser):
-        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
+        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False,
+                                         formatter_class=argparse.RawTextHelpFormatter)
 
         trainer_args = parser.add_argument_group('trainer arguments')
 
         trainer_args.add_argument('--n_epochs', type=int, required=True,
                                   help='Number of epochs used for training.')
-        trainer_args.add_argument('-batch', '--batch_size', type=int, required=True,
+        trainer_args.add_argument('-batch', '--batch_size', type=int, default=1,
                                   help='DataLoader batch size.')
         trainer_args.add_argument('--n_cpus', type=int, default=0,
                                   help='Number of cpu used in DataLoader.')
-        trainer_args.add_argument('--use_gpu', action='store_true',
-                                  help='Sets PyTorch device to gpu.')
-        trainer_args.add_argument('--tune_cuddn', action='store_true',
-                                  help='Set cuddn benchmark flag to true.')
         trainer_args.add_argument('--use_gpu', action='store_true',
                                   help='Sets PyTorch device to gpu.')
         trainer_args.add_argument('-chck_dir', '--checkpoint_dir', default=None,
                                   help='Directory to save and load checkpoints.')
         trainer_args.add_argument('-save_freq', '--save_frequency', type=int, default=None,
                                   help='Number of epochs between checkpoint saves.')
+        trainer_args.add_argument('--tune_cuddn', action='store_true',
+                                  help='Set cuddn benchmark flag to true.')
         trainer_args.add_argument('--deterministic_seed', type=int, default=None,
                                   help='Seed PyTorch and NumPy. Will overwrite tune_'
-                                       'cudnn for deterministic alternative')
+                                       'cudnn for\ndeterministic alternative.')
         trainer_args.add_argument('--pin_memory', action='store_true',
                                   help='Sets DataLoader pin_memory to true.')
+        return parser
 
     def to_device(self):
         for name, submodule in vars(self).items():
@@ -190,16 +190,13 @@ class Trainer(metaclass=AbstactFinalMeta):
 
     @runtimefinal
     def fit(self, training_dataset, validation_dataset):
-        self.training_dataset = training_dataset
-        self.validation_dataset = validation_dataset
-
-        train_loader = DataLoader(self.training_dataset, batch_size=self.batch_size,
-                                  shuffle=True, num_workers=self.n_cpus, 
-                                  pin_memory=(self.use_gpu and self.pin_memory))
+        self.training_loader = DataLoader(training_dataset, batch_size=self.batch_size,
+                                          shuffle=True, num_workers=self.n_cpus, 
+                                          pin_memory=(self.use_gpu and self.pin_memory))
         
-        valid_loader = DataLoader(self.validation_dataset, batch_size=self.batch_size,
-                                  shuffle=False, num_workers=self.n_cpus, 
-                                  pin_memory=(self.use_gpu and self.pin_memory))
+        self.validation_loader = DataLoader(validation_dataset, batch_size=self.batch_size,
+                                            shuffle=False, num_workers=self.n_cpus, 
+                                            pin_memory=(self.use_gpu and self.pin_memory))
 
         optimizers = self.configure_optimizers()
         self.optim_list, self.sched_list = dfs_detree_optimizer_list(optimizers)
@@ -216,7 +213,7 @@ class Trainer(metaclass=AbstactFinalMeta):
         self.on_fit_start()
         self.to_device()
         for self.current_epoch in range(self.n_epochs):
-            train_outputs = self.data_loop(train_loader, 'train', 
+            train_outputs = self.data_loop(self.training_loader, 'train', 
                                            self.training_step)
             self.training_epoch_end(train_outputs)
 
@@ -224,7 +221,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                 scheduler.step()
 
             with torch.no_grad():
-                valid_outputs = self.data_loop(valid_loader, 'eval', 
+                valid_outputs = self.data_loop(self.validation_loader, 'eval', 
                                                self.validation_step)
                 computed_valid = self.validation_epoch_end(valid_outputs)
 
@@ -247,17 +244,15 @@ class Trainer(metaclass=AbstactFinalMeta):
     def test(self, testing_dataset, chckpt_suffix=None):
         self.load_state(chckpt_suffix)
 
-        self.testing_dataset = testing_dataset
-
-        test_loader = DataLoader(self.testing_dataset, batch_size=self.batch_size,
-                                 shuffle=False, num_workers=self.n_cpus, 
-                                 pin_memory=(self.use_gpu and self.pin_memory))
+        self.testing_loader = DataLoader(testing_dataset, batch_size=self.batch_size,
+                                         shuffle=False, num_workers=self.n_cpus, 
+                                         pin_memory=(self.use_gpu and self.pin_memory))
         Result.reset_phase()
 
         self.on_test_start()
         self.to_device()
         with torch.no_grad():
-            test_outputs = self.data_loop(test_loader, 'eval', self.testing_step)
+            test_outputs = self.data_loop(self.testing_loader, 'eval', self.testing_step)
             self.testing_epoch_end(test_outputs)
 
         self.on_test_end()
@@ -269,7 +264,7 @@ class Trainer(metaclass=AbstactFinalMeta):
                 getattr(submodule, phase)()
 
         all_results = [None] * len(loader)
-        for batch_idx, batch in tqdm(enumerate(loader), ascii=True, desc=phase):
+        for batch_idx, batch in enumerate(tqdm(loader, ascii=True, desc=phase)):
             if isinstance(batch, torch.Tensor):
                 batch = batch.to(self.device)
 

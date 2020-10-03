@@ -22,7 +22,6 @@ class CtDataset(Dataset):
                                                 lambda x: x.float()/max_ct_value),
                                              transforms.Normalize((0.5,), (0.5,))
                                              ])
-        # Don't forget to un-normalize to [0, 1] when displaying images
 
     def __len__(self):
         return len(self.X_nums)

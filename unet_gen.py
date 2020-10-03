@@ -36,12 +36,12 @@ class UNetGenerator(nn.Module):
                                              norm_layer=norm_layer, innermost=True)  # add the innermost layer
 
         for i in range(1, num_downs): # intermediate layers
-        mult_prev = 2**min(num_downs - (i + 1), max_exp)
-        mult = 2**min(num_downs - i, max_exp)
-        drop_layer = use_dropout and ((num_downs - i) > max_exp)
+            mult_prev = 2**min(num_downs - (i + 1), max_exp)
+            mult = 2**min(num_downs - i, max_exp)
+            drop_layer = use_dropout and ((num_downs - i) > max_exp)
 
-        unet_block = UnetSkipConnectionBlock(ngf*mult_prev, ngf*mult, input_nc=None, submodule=unet_block, 
-                                             norm_layer=norm_layer, use_dropout=drop_layer)
+            unet_block = UnetSkipConnectionBlock(ngf*mult_prev, ngf*mult, input_nc=None, submodule=unet_block, 
+                                                 norm_layer=norm_layer, use_dropout=drop_layer)
 
         self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, 
                                              outermost=True, norm_layer=norm_layer)  # add the outermost layer

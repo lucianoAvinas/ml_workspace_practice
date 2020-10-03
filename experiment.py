@@ -28,7 +28,7 @@ class SimpleGAN(Trainer):
         self.image_pool = ImagePool(parsed_args.pool_size, parsed_args.replay_prob)
 
         self.sel_ind = 0
-        self.un_normalize = lambda x: (1 + x.clamp(min=-1, max=1))/2.
+        self.un_normalize = lambda x: 255.*(1 + x.clamp(min=-1, max=1))/2.
 
         self.parsed_args = parsed_args
         self.n_vis = parsed_args.n_vis
@@ -53,29 +53,33 @@ class SimpleGAN(Trainer):
     def on_fit_end(self):
         self.vis.stop()
 
-    def _shared_step(batch, save_img, is_train):
+    def _shared_step(self, batch, save_img, is_train):
         res = Result()
 
         X, Y_real = batch
         Y_fake = self.gen(X)
 
         if is_train:
-            Y_pool = self.image_pool(Y_fake.detach())
+            Y_pool = self.image_pool.query(Y_fake.detach())
         else:
             Y_pool = Y_fake
+            res.recon_error = self.crit(Y_real, Y_fake)
 
-        real_label = self.real_label.expand(X.size()[0])
-        fake_label = self.fake_label.expand(X.size()[0])
+        real_predict = self.disc(Y_real)
+        fake_predict = self.disc(Y_pool)
 
-        disc_loss = 0.5 * (self.crit(self.disc(Y_real), real_label) + \
-                           self.crit(self.disc(Y_pool), fake_label))
+        real_label = self.real_label.expand_as(real_predict)
+        fake_label = self.fake_label.expand_as(fake_predict)
+
+        disc_loss = 0.5 * (self.crit(real_predict, real_label) + \
+                           self.crit(fake_predict, fake_label))
 
         if is_train:
             res.step(disc_loss)
         res.disc_loss = disc_loss
 
-        disc_class = self.disc(Y_fake)
-        gen_loss = self.crit(disc_class, real_label)
+        gen_predict = self.disc(Y_fake)
+        gen_loss = self.crit(gen_predict, real_label)
 
         if is_train:
             res.step(gen_loss)
@@ -85,7 +89,6 @@ class SimpleGAN(Trainer):
             res.img = [self.un_normalize(X[:self.n_vis]),
                        self.un_normalize(Y_fake[:self.n_vis]),
                        self.un_normalize(Y_real[:self.n_vis])]
-
         return res
 
     def training_step(self, batch, batch_idx):
@@ -103,12 +106,12 @@ class SimpleGAN(Trainer):
     def _shared_end(self, result_outputs, is_train):
         phase = 'Train' if is_train else 'Valid'
 
-        self.vis.plot(phase + ' Loss', 'Gen. Losses', self.current_epoch, 
-                       torch.mean(result_outputs.gen_loss))
-        self.vis.plot(phase + ' Loss', 'Disc. Losses', self.current_epoch, 
-                       torch.mean(result_outputs.disc_loss))
+        self.vis.plot(phase + ' Loss', 'Generator Losses', self.current_epoch, 
+                       torch.mean(torch.stack(result_outputs.gen_loss)))
+        self.vis.plot(phase + ' Loss', 'Discriminator Losses', self.current_epoch, 
+                       torch.mean(torch.stack(result_outputs.disc_loss)))
 
-        collated = torch.cat(result_outputs.img[0], dim=3)
+        collated_imgs = torch.cat([*torch.cat(result_outputs.img[0], dim=3)], dim=1)
         self.vis.show_image(phase + ' Images', collated_imgs)
 
     def training_epoch_end(self, training_outputs):
@@ -116,9 +119,9 @@ class SimpleGAN(Trainer):
 
     def validation_epoch_end(self, validation_outputs):
         self._shared_end(validation_outputs, is_train=False)
-        self.sel_ind = random.randint(0, len(self.validation_dataset) - 1)
+        self.sel_ind = random.randint(0, len(self.validation_loader) - 1)
 
-        return torch.mean(validation_outputs.recon_error)
+        return torch.mean(torch.stack(validation_outputs.recon_error))
 
 
 parser = Trainer.add_trainer_args(parser)
