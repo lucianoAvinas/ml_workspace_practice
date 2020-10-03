@@ -52,11 +52,11 @@ class Visualizer(object):
     def stop(self):
         self.server.proc.terminate()
 
-    def plot(self, y_ax, line_name, win_name, x, y, color=None):
-        # color is a np uint8 array shape 1x3
+    def plot(self, line_name, win_name, x, y, is_log=True):
+        y_x = ('Log ' if is_log else '') + 'Loss'
         if win_name not in self.windows:
             yaxis_dict = {'title': y_ax}
-            if y_ax.split(' ')[0].lower() == 'log':
+            if is_log:
                 yaxis_dict['type'] = 'log'
             else:
                 yaxis_dict['type'] = 'linear'
@@ -64,8 +64,7 @@ class Visualizer(object):
             self.windows[win_name] = self.vis.line(X=torch.tensor([x], 
                 dtype=torch.float), Y=torch.tensor([y], dtype=torch.float), 
                 opts=dict(legend=[line_name], title=win_name, xlabel='Epochs',
-                    ylabel=y_ax, linecolor=color, layoutopts={'plotly':
-                                                {'yaxis':yaxis_dict}}))
+                ylabel=y_ax, layoutopts={'plotly':{'yaxis':yaxis_dict}}))
         else:
             self.vis.line(X=torch.tensor([x]), Y=torch.tensor([y]), 
                           win=self.windows[win_name], name=line_name, 

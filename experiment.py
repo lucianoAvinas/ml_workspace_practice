@@ -53,8 +53,11 @@ class SimpleGAN(Trainer):
     def on_fit_end(self):
         self.vis.stop()
 
-    def _shared_step(X, Y_fake, Y_real, is_train=False):
+    def _shared_step(batch, save_img, is_train):
         res = Result()
+
+        X, Y_real = batch
+        Y_fake = self.gen(X)
 
         if is_train:
             Y_pool = self.image_pool(Y_fake.detach())
@@ -78,45 +81,43 @@ class SimpleGAN(Trainer):
             res.step(gen_loss)
         res.gen_loss = gen_loss
 
+        if save_img:
+            res.img = [self.un_normalize(X[:self.n_vis]),
+                       self.un_normalize(Y_fake[:self.n_vis]),
+                       self.un_normalize(Y_real[:self.n_vis])]
+
         return res
 
     def training_step(self, batch, batch_idx):
-        X, Y_real = batch
-        Y_fake = self.gen(X)
-        
-        res = self._shared_step(X, Y_fake, Y_real)
-
-        if batch_idx == 0:
-            res.img = [self.un_normalize(X[:self.n_vis]),
-                       self.un_normalize(Y_fake[:self.n_vis]),
-                       self.un_normalize(Y_real[:self.n_vis])]
-
+        res = self._shared_step(batch, 
+                                save_img=(batch_idx == 0),
+                                is_train=True)            
         return res
-
-    def training_epoch_end(self, training_outputs):
-        #loss = torch.mean(training_step_outputs.loss) # break into gen and disc
-        collated = torch.cat(training_outputs.img[0], dim=3)
-        #self.vis.show_image('Train Images', collated_imgs)
 
     def validation_step(self, batch, batch_idx):
-        X, Y_real = batch
-        Y_fake = self.gen(X)
-
-        res = self._shared_step(X, Y_fake, Y_real, is_eval=True)
-        res.recon_error = self.crit(Y_real, Y_fake)
-
-        if batch_idx == self.sel_ind:
-            res.img = [self.un_normalize(X[:self.n_vis]),
-                       self.un_normalize(Y_fake[:self.n_vis]),
-                       self.un_normalize(Y_real[:self.n_vis])]
-
+        res = self._shared_step(batch, 
+                                save_img=(batch_idx == self.sel_ind),
+                                is_train=False)  
         return res
 
+    def _shared_end(self, result_outputs, is_train):
+        phase = 'Train' if is_train else 'Valid'
+
+        self.vis.plot(phase + ' Loss', 'Gen. Losses', self.current_epoch, 
+                       torch.mean(result_outputs.gen_loss))
+        self.vis.plot(phase + ' Loss', 'Disc. Losses', self.current_epoch, 
+                       torch.mean(result_outputs.disc_loss))
+
+        collated = torch.cat(result_outputs.img[0], dim=3)
+        self.vis.show_image(phase + ' Images', collated_imgs)
+
+    def training_epoch_end(self, training_outputs):
+        self._shared_end(training_outputs, is_train=True)
+
     def validation_epoch_end(self, validation_outputs):
-        collated = torch.cat(validation_outputs.img[0], dim=3)
-        self.sel_ind = random.randint(0, 
-                              len(self.validation_dataset) - 1)
-        # return recon error
+        self._shared_end(validation_outputs, is_train=False)
+        self.sel_ind = random.randint(0, len(self.validation_dataset) - 1)
+
         return torch.mean(validation_outputs.recon_error)
 
 
