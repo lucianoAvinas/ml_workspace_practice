@@ -4,6 +4,7 @@ from zmq.eventloop import ioloop
 ioloop.install()
 import tornado.ioloop
 import tornado.httpserver 
+import webbrowser
 import logging
 import torch
 import time
@@ -35,6 +36,7 @@ class VisServer(object):
     def launch_instance(self):
         self.proc = multiprocessing.Process(
             target=self.instance_runner)
+        webbrowser.open('http://localhost:8097')
         self.proc.start()
 
 
