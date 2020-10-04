@@ -92,7 +92,7 @@ class Trainer(metaclass=AbstactFinalMeta):
     @staticmethod
     def add_trainer_args(parent_parser):
         parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False,
-                                         formatter_class=argparse.RawTextHelpFormatter)
+                                         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
         trainer_args = parser.add_argument_group('trainer arguments')
 

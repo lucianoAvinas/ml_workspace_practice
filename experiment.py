@@ -106,9 +106,9 @@ class SimpleGAN(Trainer):
     def _shared_end(self, result_outputs, is_train):
         phase = 'Train' if is_train else 'Valid'
 
-        self.vis.plot(phase + ' Loss', 'Generator Losses', self.current_epoch, 
+        self.vis.plot('Gen. Loss', phase + ' Loss', self.current_epoch, 
                        torch.mean(torch.stack(result_outputs.gen_loss)))
-        self.vis.plot(phase + ' Loss', 'Discriminator Losses', self.current_epoch, 
+        self.vis.plot('Disc. Loss', phase + ' Loss', self.current_epoch, 
                        torch.mean(torch.stack(result_outputs.disc_loss)))
 
         collated_imgs = torch.cat([*torch.cat(result_outputs.img[0], dim=3)], dim=1)
